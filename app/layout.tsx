@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "Classroom Dashboard",
   description: "A scroll-less Google Classroom assignment dashboard",
-    generator: 'v0.dev'
+    generator: 'Junaid Momin'
 }
 
 export default function RootLayout({
