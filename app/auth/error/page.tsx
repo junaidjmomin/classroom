@@ -1,6 +1,7 @@
 "use client"
 
 import { useSearchParams } from 'next/navigation'
+import { Suspense } from 'react'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertCircle, Home, RefreshCw } from "lucide-react"
@@ -22,10 +23,9 @@ const errorMessages = {
   SessionRequired: "The content of this page requires you to be signed in at all times.",
 }
 
-export default function AuthErrorPage() {
+function ErrorContent() {
   const searchParams = useSearchParams()
   const error = searchParams.get('error') as keyof typeof errorMessages
-
   const errorMessage = errorMessages[error] || errorMessages.Default
 
   const getErrorDetails = (error: string) => {
@@ -136,5 +136,13 @@ export default function AuthErrorPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+export default function AuthErrorPageWrapper() {
+  return (
+    <Suspense fallback={<div className="text-center p-10 text-gray-600">Loading error info...</div>}>
+      <ErrorContent />
+    </Suspense>
   )
 }
