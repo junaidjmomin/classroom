@@ -1,12 +1,198 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useSession, signIn } from "next-auth/react"
+import { useSession, signIn, signOut } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Calendar, Clock, ExternalLink, BookOpen, AlertCircle } from "lucide-react"
+import { Calendar, Clock, ExternalLink, BookOpen, AlertCircle, RefreshCw, LogOut, User } from "lucide-react"
 import { fetchClassroomAssignments } from "@/lib/fetchClassroomAssignments"
+import Link from "next/link"
+
+// Diagnostics component for debugging
+function ClassroomDiagnostics({ accessToken }: { accessToken: string }) {
+  const [diagnostics, setDiagnostics] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+
+  const runDiagnostics = async () => {
+    setLoading(true)
+    const results: any = {
+      timestamp: new Date().toISOString(),
+      tests: []
+    }
+
+    try {
+      // Test 1: Basic API access
+      console.log("🔬 Test 1: Basic API access")
+      const profileResponse = await fetch(
+        "https://classroom.googleapis.com/v1/userProfiles/me",
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+        }
+      )
+      
+      const profileData = profileResponse.ok ? await profileResponse.json() : null
+      results.tests.push({
+        name: "User Profile Access",
+        status: profileResponse.ok ? "✅ PASS" : "❌ FAIL",
+        details: profileResponse.ok 
+          ? {
+              name: profileData.name.fullName,
+              email: profileData.emailAddress,
+              id: profileData.id
+            }
+          : `Error ${profileResponse.status}: ${await profileResponse.text()}`
+      })
+
+      // Test 2: Courses access
+      console.log("🔬 Test 2: Courses access")
+      const coursesResponse = await fetch(
+        "https://classroom.googleapis.com/v1/courses",
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+        }
+      )
+      
+      const coursesData = coursesResponse.ok ? await coursesResponse.json() : null
+      results.tests.push({
+        name: "Courses Access",
+        status: coursesResponse.ok ? "✅ PASS" : "❌ FAIL",
+        details: coursesResponse.ok 
+          ? {
+              totalCourses: coursesData?.courses?.length || 0,
+              activeCourses: coursesData?.courses?.filter((c: any) => c.courseState === 'ACTIVE').length || 0,
+              courses: coursesData?.courses?.map((c: any) => ({
+                name: c.name,
+                id: c.id,
+                state: c.courseState,
+                enrollmentCode: c.enrollmentCode
+              })) || []
+            }
+          : `Error ${coursesResponse.status}: ${await coursesResponse.text()}`
+      })
+
+      // Test 3: Course work for first active course
+      if (coursesData?.courses?.length > 0) {
+        const activeCourses = coursesData.courses.filter((c: any) => c.courseState === 'ACTIVE')
+        
+        if (activeCourses.length > 0) {
+          const firstCourse = activeCourses[0]
+          console.log("🔬 Test 3: Course work access")
+          const courseWorkResponse = await fetch(
+            `https://classroom.googleapis.com/v1/courses/${firstCourse.id}/courseWork`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+            }
+          )
+          
+          const courseWorkData = courseWorkResponse.ok ? await courseWorkResponse.json() : null
+          results.tests.push({
+            name: `Course Work Access (${firstCourse.name})`,
+            status: courseWorkResponse.ok ? "✅ PASS" : "❌ FAIL",
+            details: courseWorkResponse.ok 
+              ? {
+                  courseId: firstCourse.id,
+                  courseName: firstCourse.name,
+                  totalAssignments: courseWorkData?.courseWork?.length || 0,
+                  publishedAssignments: courseWorkData?.courseWork?.filter((w: any) => w.state === 'PUBLISHED').length || 0,
+                  assignments: courseWorkData?.courseWork?.map((w: any) => ({
+                    title: w.title,
+                    state: w.state,
+                    workType: w.workType,
+                    hasDueDate: !!w.dueDate,
+                    creationTime: w.creationTime
+                  })) || []
+                }
+              : `Error ${courseWorkResponse.status}: ${await courseWorkResponse.text()}`
+          })
+        } else {
+          results.tests.push({
+            name: "Course Work Access",
+            status: "⏭️ SKIP",
+            details: "No active courses found"
+          })
+        }
+      }
+
+    } catch (error) {
+      results.tests.push({
+        name: "Diagnostics Error",
+        status: "❌ ERROR",
+        details: error instanceof Error ? error.message : String(error)
+      })
+    }
+
+    setDiagnostics(results)
+    setLoading(false)
+  }
+
+  return (
+    <Card className="mb-4">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          🔬 Classroom API Diagnostics
+          <Button 
+            onClick={runDiagnostics} 
+            disabled={loading}
+            size="sm"
+          >
+            {loading ? "Running..." : "Run Tests"}
+          </Button>
+        </CardTitle>
+      </CardHeader>
+      
+      <CardContent>
+        {!diagnostics && !loading && (
+          <p className="text-gray-600">
+            Click "Run Tests" to check your Classroom API access and diagnose why you have 0 assignments.
+          </p>
+        )}
+        
+        {loading && (
+          <div className="flex items-center space-x-2">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+            <span>Running diagnostics...</span>
+          </div>
+        )}
+        
+        {diagnostics && (
+          <div className="space-y-4">
+            <div className="text-sm text-gray-600">
+              Last run: {new Date(diagnostics.timestamp).toLocaleString()}
+            </div>
+            
+            {diagnostics.tests.map((test: any, index: number) => (
+              <div key={index} className="border rounded-lg p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-medium">{test.name}</span>
+                  <Badge variant="outline">{test.status}</Badge>
+                </div>
+                
+                <div className="text-sm bg-gray-50 p-2 rounded">
+                  <pre className="whitespace-pre-wrap overflow-x-auto text-xs">
+                    {typeof test.details === 'object' 
+                      ? JSON.stringify(test.details, null, 2)
+                      : test.details
+                    }
+                  </pre>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function ClassroomDashboard() {
   const session = useSession()
@@ -21,10 +207,26 @@ export default function ClassroomDashboard() {
       console.log("🔄 useEffect triggered, session status:", session?.status)
       console.log("🔄 Session data:", session?.data)
       
-      if (session?.status === "authenticated" && session.data?.accessToken) {
+      if (session?.status === "authenticated") {
         console.log("✅ Starting to load assignments...")
+        console.log("🔑 Access token exists:", !!session.data?.accessToken)
+        console.log("🔑 Session error:", session.data?.error)
+        
         setLoading(true)
         setError(null)
+        
+        // Check for token refresh errors
+        if (session.data?.error === "RefreshAccessTokenError") {
+          setError("Your session has expired. Please sign in again.")
+          setLoading(false)
+          return
+        }
+        
+        if (!session.data?.accessToken) {
+          setError("No access token available. Please sign out and sign in again.")
+          setLoading(false)
+          return
+        }
         
         try {
           console.log("🚀 Calling fetchClassroomAssignments...")
@@ -39,6 +241,9 @@ export default function ClassroomDashboard() {
             hasAccessToken: !!session.data?.accessToken,
             tokenPreview: session.data?.accessToken?.substring(0, 20) + "...",
             assignmentCount: fetchedAssignments.length,
+            sessionError: session.data?.error,
+            userEmail: session.data?.user?.email,
+            userName: session.data?.user?.name,
             timestamp: new Date().toISOString()
           })
           
@@ -59,6 +264,14 @@ export default function ClassroomDashboard() {
 
     loadAssignments()
   }, [session?.status, session?.data?.accessToken])
+
+  const handleSignOut = async () => {
+    await signOut()
+  }
+
+  const handleRefresh = () => {
+    window.location.reload()
+  }
 
   const displayedAssignments = showAll ? assignments : assignments.slice(0, 4)
 
@@ -97,19 +310,33 @@ export default function ClassroomDashboard() {
         <div>Session Status: <span className="font-mono">{session?.status}</span></div>
         <div>Has Access Token: <span className="font-mono">{debugInfo?.hasAccessToken ? "✅" : "❌"}</span></div>
         <div>Token Preview: <span className="font-mono">{debugInfo?.tokenPreview || "None"}</span></div>
+        <div>User: <span className="font-mono">{debugInfo?.userName} ({debugInfo?.userEmail})</span></div>
+        <div>Session Error: <span className="font-mono">{debugInfo?.sessionError || "None"}</span></div>
         <div>Assignment Count: <span className="font-mono">{assignments.length}</span></div>
         <div>Loading: <span className="font-mono">{loading ? "Yes" : "No"}</span></div>
         <div>Error: <span className="font-mono">{error || "None"}</span></div>
         <div>Last Update: <span className="font-mono">{debugInfo?.timestamp}</span></div>
       </div>
-      <Button 
-        variant="outline" 
-        size="sm" 
-        className="mt-2" 
-        onClick={() => window.location.reload()}
-      >
-        🔄 Refresh Page
-      </Button>
+      <div className="flex gap-2 mt-2">
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={handleRefresh}
+        >
+          <RefreshCw className="h-4 w-4 mr-1" />
+          Refresh Page
+        </Button>
+        {session?.status === "authenticated" && (
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={handleSignOut}
+          >
+            <LogOut className="h-4 w-4 mr-1" />
+            Sign Out & Try Again
+          </Button>
+        )}
+      </div>
     </div>
   )
 
@@ -144,6 +371,11 @@ export default function ClassroomDashboard() {
         {/* Debug Panel - Remove in production */}
         <DebugPanel />
 
+        {/* API Diagnostics - Remove in production */}
+        {session.data?.accessToken && (
+          <ClassroomDiagnostics accessToken={session.data.accessToken} />
+        )}
+
         {/* Error Display */}
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
@@ -154,15 +386,34 @@ export default function ClassroomDashboard() {
           </div>
         )}
 
-        {/* Header */}
-        <div className="mb-8 text-center">
-          <div className="flex items-center justify-center space-x-3 mb-4">
-            <BookOpen className="h-8 w-8 text-blue-600" />
-            <h1 className="text-3xl font-bold text-gray-900">Classroom Dashboard</h1>
+        {/* Header with Logout */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-3">
+              <BookOpen className="h-8 w-8 text-blue-600" />
+              <h1 className="text-3xl font-bold text-gray-900">Classroom Dashboard</h1>
+            </div>
+            <div className="flex items-center space-x-3">
+              <div className="text-right">
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                  <User className="h-4 w-4" />
+                  <span>{session.data?.user?.name}</span>
+                </div>
+                <div className="text-xs text-gray-500">{session.data?.user?.email}</div>
+              </div>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/auth/logout">
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Sign Out
+                </Link>
+              </Button>
+            </div>
           </div>
-          <p className="text-gray-600">
-            {assignments.length} assignments • {assignments.filter((a) => a.status === "urgent").length} urgent
-          </p>
+          <div className="text-center">
+            <p className="text-gray-600">
+              {assignments.length} assignments • {assignments.filter((a) => a.status === "urgent").length} urgent
+            </p>
+          </div>
         </div>
 
         {/* Assignment Cards Grid */}
@@ -188,7 +439,7 @@ export default function ClassroomDashboard() {
                     </div>
                     <div className="flex items-center space-x-1">
                       <Clock className="h-4 w-4" />
-                      <span>11:59 PM</span>
+                      <span>{assignment.dueTime}</span>
                     </div>
                   </div>
 
@@ -222,8 +473,9 @@ export default function ClassroomDashboard() {
               This could mean:<br/>
               • You're all caught up! 🎉<br/>
               • Your courses don't have assignments yet<br/>
-              • There might be a permission issue<br/>
-              Check the debug panel above for more details.
+              • Your courses are not in ACTIVE state<br/>
+              • Assignments are not PUBLISHED<br/>
+              Run the diagnostics above to check your courses and assignments.
             </p>
           </div>
         )}
