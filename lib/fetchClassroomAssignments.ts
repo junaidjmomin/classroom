@@ -16,6 +16,7 @@ interface Course {
   section?: string
   room?: string
   courseState?: string
+  enrollmentCode?: string
 }
 
 interface CourseWork {
@@ -52,7 +53,7 @@ interface StudentSubmission {
 }
 
 export async function fetchClassroomAssignments(accessToken: string): Promise<Assignment[]> {
-  console.log("🚀 Starting comprehensive assignment fetch...");
+  console.log("🚀 Starting enhanced assignment fetch with debugging...");
 
   if (!accessToken) {
     console.error("❌ No access token provided");
@@ -60,10 +61,10 @@ export async function fetchClassroomAssignments(accessToken: string): Promise<As
   }
 
   try {
-    // First, fetch all courses
-    console.log("📚 Fetching courses...");
-    const coursesResponse = await fetch(
-      "https://classroom.googleapis.com/v1/courses?courseStates=ACTIVE",
+    // First, fetch all courses (including inactive ones for debugging)
+    console.log("📚 Fetching ALL courses (active and inactive)...");
+    const allCoursesResponse = await fetch(
+      "https://classroom.googleapis.com/v1/courses",
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -72,29 +73,44 @@ export async function fetchClassroomAssignments(accessToken: string): Promise<As
       }
     );
 
-    if (!coursesResponse.ok) {
-      const errorText = await coursesResponse.text();
+    if (!allCoursesResponse.ok) {
+      const errorText = await allCoursesResponse.text();
       console.error("❌ Failed to fetch courses:", {
-        status: coursesResponse.status,
+        status: allCoursesResponse.status,
         error: errorText
       });
       
-      if (coursesResponse.status === 401) {
+      if (allCoursesResponse.status === 401) {
         throw new Error("Authentication failed. Please sign in again.");
-      } else if (coursesResponse.status === 403) {
+      } else if (allCoursesResponse.status === 403) {
         throw new Error("Permission denied. Please ensure Classroom API access is granted.");
       }
       
-      throw new Error(`Failed to fetch courses: ${coursesResponse.status}`);
+      throw new Error(`Failed to fetch courses: ${allCoursesResponse.status}`);
     }
 
-    const coursesData = await coursesResponse.json();
-    const courses: Course[] = coursesData.courses || [];
+    const allCoursesData = await allCoursesResponse.json();
+    const allCourses: Course[] = allCoursesData.courses || [];
     
-    console.log(`📚 Found ${courses.length} active courses`);
+    console.log(`📚 Found ${allCourses.length} total courses (all states)`);
     
-    if (courses.length === 0) {
+    // Log course details for debugging
+    allCourses.forEach((course, index) => {
+      console.log(`📖 Course ${index + 1}: "${course.name}" (${course.id}) - State: ${course.courseState}`);
+    });
+
+    // Filter for active courses
+    const activeCourses = allCourses.filter(course => course.courseState === 'ACTIVE');
+    console.log(`📚 Found ${activeCourses.length} ACTIVE courses`);
+    
+    if (activeCourses.length === 0) {
       console.warn("⚠️ No active courses found");
+      if (allCourses.length > 0) {
+        console.warn("💡 You have courses, but they're not in ACTIVE state:");
+        allCourses.forEach(course => {
+          console.warn(`   - ${course.name}: ${course.courseState}`);
+        });
+      }
       return [];
     }
 
@@ -112,13 +128,13 @@ export async function fetchClassroomAssignments(accessToken: string): Promise<As
       "bg-lime-500"
     ];
 
-    // Process each course
-    for (let i = 0; i < courses.length; i++) {
-      const course = courses[i];
+    // Process each active course
+    for (let i = 0; i < activeCourses.length; i++) {
+      const course = activeCourses[i];
       console.log(`\n📖 Processing course: ${course.name} (${course.id})`);
 
       try {
-        // Fetch course work (assignments)
+        // Fetch course work (assignments) with detailed debugging
         const courseWorkUrl = `https://classroom.googleapis.com/v1/courses/${course.id}/courseWork`;
         console.log(`📝 Fetching course work from: ${courseWorkUrl}`);
         
@@ -141,15 +157,37 @@ export async function fetchClassroomAssignments(accessToken: string): Promise<As
         const assignmentsData = await assignmentsResponse.json();
         const courseWork: CourseWork[] = assignmentsData.courseWork || [];
         
-        console.log(`📝 Found ${courseWork.length} assignments in ${course.name}`);
+        console.log(`📝 Raw response for ${course.name}:`, {
+          hasCourseWork: !!assignmentsData.courseWork,
+          courseWorkLength: courseWork.length,
+          firstAssignment: courseWork[0] ? {
+            title: courseWork[0].title,
+            state: courseWork[0].state,
+            workType: courseWork[0].workType
+          } : null
+        });
 
         if (courseWork.length === 0) {
-          console.log(`📝 No assignments found for ${course.name}`);
+          console.log(`📝 No course work found for ${course.name}`);
           continue;
         }
 
-        // Process each assignment
-        for (const work of courseWork) {
+        // Log all assignments for debugging
+        courseWork.forEach((work, index) => {
+          console.log(`📋 Assignment ${index + 1}: "${work.title}" - State: ${work.state}, Type: ${work.workType}`);
+        });
+
+        // Filter for published assignments only
+        const publishedWork = courseWork.filter(work => work.state === 'PUBLISHED');
+        console.log(`📝 Found ${publishedWork.length} PUBLISHED assignments in ${course.name}`);
+
+        if (publishedWork.length === 0) {
+          console.log(`📝 No published assignments in ${course.name}`);
+          continue;
+        }
+
+        // Process each published assignment
+        for (const work of publishedWork) {
           console.log(`\n📋 Processing: ${work.title}`);
           
           try {
@@ -176,6 +214,8 @@ export async function fetchClassroomAssignments(accessToken: string): Promise<As
                     submissionStatus = "completed";
                   }
                 }
+              } else {
+                console.warn(`⚠️ Could not fetch submission status for ${work.title}: ${submissionsResponse.status}`);
               }
             } catch (submissionError) {
               console.warn(`⚠️ Could not fetch submission status for ${work.title}:`, submissionError);
@@ -206,6 +246,8 @@ export async function fetchClassroomAssignments(accessToken: string): Promise<As
                   status = "urgent"; // Due soon
                 }
               }
+            } else {
+              console.log(`📅 No due date for: ${work.title}`);
             }
 
             if (work.dueTime) {
@@ -248,6 +290,20 @@ export async function fetchClassroomAssignments(accessToken: string): Promise<As
     }
 
     console.log(`\n🎯 Total assignments collected: ${allAssignments.length}`);
+
+    // Enhanced debugging summary
+    console.log("📊 Assignment Collection Summary:");
+    console.log(`   - Total courses found: ${allCourses.length}`);
+    console.log(`   - Active courses: ${activeCourses.length}`);
+    console.log(`   - Final assignments: ${allAssignments.length}`);
+    
+    if (allAssignments.length === 0) {
+      console.log("🔍 Debugging tips:");
+      console.log("   1. Check if your courses have published assignments");
+      console.log("   2. Verify you're enrolled as a student (not just a teacher)");
+      console.log("   3. Make sure assignments have due dates");
+      console.log("   4. Try creating a test assignment in Google Classroom");
+    }
 
     // Sort assignments: completed last, then by due date
     const sortedAssignments = allAssignments.sort((a, b) => {
