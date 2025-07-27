@@ -196,18 +196,72 @@ export default function EnhancedClassroomDashboard() {
       : 0;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p‑4">
-      <div className="max‑w‑7xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      <div className="max-w-7xl mx-auto">
         {error && (
-          <div className="bg‑red‑100 border border‑red‑400 text‑red‑700 px‑4 py‑3 rounded mb‑4">
-            <AlertCircle className="h‑5 w‑5 mr‑2" />
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+            <AlertCircle className="h-5 w-5 mr-2" />
             <span>Error: {error}</span>
           </div>
         )}
 
-        {/* ... the rest of your JSX—for header, tabs, dashboard, etc. */}
+        {/* Header Section */}
+        <header className="flex justify-between items-center mb-8">
+          <div className="flex items-center space-x-2">
+            <Brain className="h-8 w-8 text-blue-600" />
+            <h1 className="text-2xl font-bold">AI Task Prioritizer</h1>
+          </div>
+          <div className="flex items-center space-x-4">
+            <Button variant="outline" onClick={handleRefresh}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Refresh
+            </Button>
+            <Button variant="outline" onClick={() => signOut()}>
+              <LogOut className="h-4 w-4 mr-2" />
+              Sign Out
+            </Button>
+          </div>
+        </header>
 
-        {/* Replace “{/* … the rest … */}” above with your existing JSX content, ensuring it's properly nested */}
+        {/* Main Content */}
+        <main>
+          <Tabs defaultValue="dashboard" className="space-y-6">
+            <TabsList>
+              <TabsTrigger value="dashboard">
+                <BarChart3 className="h-4 w-4 mr-2" />
+                Dashboard
+              </TabsTrigger>
+              <TabsTrigger value="tasks">
+                <Target className="h-4 w-4 mr-2" />
+                Tasks
+              </TabsTrigger>
+              <TabsTrigger value="recommendations">
+                <Lightbulb className="h-4 w-4 mr-2" />
+                Recommendations
+              </TabsTrigger>
+              <TabsTrigger value="settings">
+                <Settings className="h-4 w-4 mr-2" />
+                Settings
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="dashboard">
+              {/* Dashboard content goes here */}
+            </TabsContent>
+
+            <TabsContent value="tasks">
+              {/* Tasks content goes here */}
+            </TabsContent>
+
+            <TabsContent value="recommendations">
+              {/* Recommendations content goes here */}
+            </TabsContent>
+
+            <TabsContent value="settings">
+              {/* Settings content goes here */}
+            </TabsContent>
+          </Tabs>
+        </main>
       </div>
     </div>
   );
