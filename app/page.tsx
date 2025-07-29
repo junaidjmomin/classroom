@@ -1,3 +1,4 @@
+// app/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -31,19 +32,44 @@ import {
   Settings,
   Lightbulb,
   BarChart3,
-  ChevronDown,
-  ChevronUp,
+  Trash2,
+  X,
 } from "lucide-react";
 import { fetchClassroomAssignments, PriorityCalculator, AITaskParser } from "@/lib/fetchClassroomAssignments";
 import Link from "next/link";
-import { Skeleton } from "@/components/ui/skeleton";
+
+// Session storage keys
+const STORAGE_KEYS = {
+  DELETED_TASKS: 'classroom_deleted_tasks',
+  USER_TASKS: 'classroom_user_tasks'
+};
+
+interface Assignment {
+  id: string;
+  title: string;
+  course: string;
+  courseColor: string;
+  dueDate: string;
+  dueTime: string;
+  status: "pending" | "urgent" | "completed";
+  description: string;
+  link: string;
+  estimatedTime: number;
+  impact: number;
+  contextSwitchCost: number;
+  priorityScore?: number;
+  workType: string;
+  submissionStatus: string;
+  createdAt: string;
+  isManual?: boolean;
+}
 
 export default function EnhancedClassroomDashboard() {
-  const session = useSession();
-  const [assignments, setAssignments] = useState<any[]>([]);
+  const { data: session, status } = useSession();
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedTab, setSelectedTab] = useState("dashboard");
   const [naturalLanguageInput, setNaturalLanguageInput] = useState("");
   const [showAddTask, setShowAddTask] = useState(false);
   const [newTask, setNewTask] = useState({
@@ -56,33 +82,69 @@ export default function EnhancedClassroomDashboard() {
     description: "",
   });
 
+  // Load deleted tasks from memory on component mount
+  useEffect(() => {
+    try {
+      const storedDeleted = localStorage.getItem(STORAGE_KEYS.DELETED_TASKS);
+      if (storedDeleted) {
+        setDeletedTaskIds(new Set(JSON.parse(storedDeleted)));
+      }
+    } catch (error) {
+      console.error("Error loading deleted tasks:", error);
+    }
+  }, []);
+
+  // Save deleted tasks to memory whenever the set changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.DELETED_TASKS, JSON.stringify(Array.from(deletedTaskIds)));
+    } catch (error) {
+      console.error("Error saving deleted tasks:", error);
+    }
+  }, [deletedTaskIds]);
+
   useEffect(() => {
     async function loadAssignments() {
-      if (session?.status === "authenticated") {
+      if (status === "authenticated") {
         setLoading(true);
         setError(null);
         
-        if (session.data?.error === "RefreshAccessTokenError") {
+        if (session?.error === "RefreshAccessTokenError") {
           setError("Your session has expired. Please sign in again.");
           setLoading(false);
           return;
         }
         
-        if (!session.data?.accessToken) {
+        if (!session?.accessToken) {
           setError("No access token available. Please sign out and sign in again.");
           setLoading(false);
           return;
         }
         
         try {
-          const fetchedAssignments = await fetchClassroomAssignments(session.data.accessToken);
-          console.log("Fetched assignments:", fetchedAssignments); // Debug log
+          const fetchedAssignments = await fetchClassroomAssignments(session.accessToken);
+          console.log("Fetched assignments:", fetchedAssignments);
           
-          if (!fetchedAssignments || fetchedAssignments.length === 0) {
-            setError("No active courses or assignments found. Please check your Google Classroom account.");
-          } else {
-            setAssignments(fetchedAssignments);
+          // Load manual tasks from storage
+          const storedTasks = localStorage.getItem(STORAGE_KEYS.USER_TASKS);
+          let manualTasks: Assignment[] = [];
+          if (storedTasks) {
+            try {
+              manualTasks = JSON.parse(storedTasks);
+            } catch (e) {
+              console.error("Error parsing stored tasks:", e);
+            }
           }
+          
+          // Combine and filter out deleted tasks
+          const allTasks = [...fetchedAssignments, ...manualTasks];
+          const filteredTasks = allTasks.filter(task => !deletedTaskIds.has(task.id));
+          
+          if (filteredTasks.length === 0) {
+            setError("No active assignments found. Add some tasks manually or check your Google Classroom account.");
+          }
+          
+          setAssignments(filteredTasks);
         } catch (err: any) {
           console.error("Failed to load assignments:", err);
           setError(err.message || "Failed to load assignments. Please try again.");
@@ -90,13 +152,30 @@ export default function EnhancedClassroomDashboard() {
         } finally {
           setLoading(false);
         }
-      } else if (session?.status === "unauthenticated") {
+      } else if (status === "unauthenticated") {
         setLoading(false);
       }
     }
     
     loadAssignments();
-  }, [session?.status, session?.data?.accessToken]);
+  }, [status, session?.accessToken, deletedTaskIds]);
+
+  const handleDeleteTask = (taskId: string) => {
+    setDeletedTaskIds(prev => new Set([...prev, taskId]));
+    setAssignments(prev => prev.filter(task => task.id !== taskId));
+    
+    // Also remove from manual tasks storage if it's a manual task
+    try {
+      const storedTasks = localStorage.getItem(STORAGE_KEYS.USER_TASKS);
+      if (storedTasks) {
+        const tasks = JSON.parse(storedTasks);
+        const updatedTasks = tasks.filter((task: Assignment) => task.id !== taskId);
+        localStorage.setItem(STORAGE_KEYS.USER_TASKS, JSON.stringify(updatedTasks));
+      }
+    } catch (error) {
+      console.error("Error updating stored tasks:", error);
+    }
+  };
 
   const handleNaturalLanguageSubmit = () => {
     if (!naturalLanguageInput.trim()) return;
@@ -108,8 +187,25 @@ export default function EnhancedClassroomDashboard() {
         return;
       }
       
-      setAssignments((prev) => [...prev, ...parsed]);
+      // Mark as manual tasks
+      const manualTasks = parsed.map(task => ({ ...task, isManual: true }));
+      
+      setAssignments((prev) => {
+        const updated = [...prev, ...manualTasks].sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+        
+        // Save manual tasks to storage
+        const allManualTasks = updated.filter(task => task.isManual);
+        try {
+          localStorage.setItem(STORAGE_KEYS.USER_TASKS, JSON.stringify(allManualTasks));
+        } catch (error) {
+          console.error("Error saving manual tasks:", error);
+        }
+        
+        return updated;
+      });
+      
       setNaturalLanguageInput("");
+      setError(null);
     } catch (err: any) {
       setError("Failed to parse task: " + err.message);
     }
@@ -122,7 +218,7 @@ export default function EnhancedClassroomDashboard() {
     }
     
     try {
-      const task = {
+      const task: Assignment = {
         ...newTask,
         id: `manual-${Date.now()}`,
         courseColor: "bg-gray-500",
@@ -131,13 +227,25 @@ export default function EnhancedClassroomDashboard() {
         workType: "ASSIGNMENT",
         submissionStatus: "NEW",
         createdAt: new Date().toISOString(),
+        dueTime: "11:59 PM",
+        isManual: true,
       };
       
       task.priorityScore = PriorityCalculator.calculatePriority(task);
       
-      setAssignments((prev) =>
-        [...prev, task].sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0))
-      );
+      setAssignments((prev) => {
+        const updated = [...prev, task].sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+        
+        // Save manual tasks to storage
+        const allManualTasks = updated.filter(task => task.isManual);
+        try {
+          localStorage.setItem(STORAGE_KEYS.USER_TASKS, JSON.stringify(allManualTasks));
+        } catch (error) {
+          console.error("Error saving manual tasks:", error);
+        }
+        
+        return updated;
+      });
       
       setNewTask({
         title: "",
@@ -149,8 +257,18 @@ export default function EnhancedClassroomDashboard() {
         description: "",
       });
       setShowAddTask(false);
+      setError(null);
     } catch (err: any) {
       setError("Failed to add task: " + err.message);
+    }
+  };
+
+  const clearDeletedTasks = () => {
+    setDeletedTaskIds(new Set());
+    try {
+      localStorage.removeItem(STORAGE_KEYS.DELETED_TASKS);
+    } catch (error) {
+      console.error("Error clearing deleted tasks:", error);
     }
   };
 
@@ -211,7 +329,7 @@ export default function EnhancedClassroomDashboard() {
 
   // Stats calculations with null checks
   const urgentTasks = assignments.filter((a) => 
-    a.status === "urgent" && a.status !== "completed"
+    a.status === "urgent" || (a.dueDate && getDaysUntilDue(a.dueDate).includes("today"))
   ).length;
   
   const quickWins = assignments.filter((a) => 
@@ -222,21 +340,20 @@ export default function EnhancedClassroomDashboard() {
     ? assignments.reduce((sum, a) => sum + (a.priorityScore || 0), 0) / assignments.length
     : 0;
 
-  // UI Loading & Auth states
-  if (session?.status === "loading" || loading) {
+  // Loading state
+  if (status === "loading" || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center space-y-4">
           <div className="animate-spin h-12 w-12 rounded-full border-b-2 border-blue-600 mx-auto" />
           <p className="text-gray-600">Loading your AI-powered assignments...</p>
-          <Skeleton className="h-4 w-[250px] mx-auto" />
-          <Skeleton className="h-4 w-[200px] mx-auto" />
         </div>
       </div>
     );
   }
 
-  if (session?.status === "unauthenticated") {
+  // Unauthenticated state
+  if (status === "unauthenticated") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center max-w-md p-6 bg-white rounded-lg shadow-md">
@@ -261,17 +378,17 @@ export default function EnhancedClassroomDashboard() {
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 flex items-start">
             <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
-            <div>
+            <div className="flex-1">
               <span className="block">{error}</span>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="mt-2 text-red-700 hover:text-red-800"
-                onClick={() => setError(null)}
-              >
-                Dismiss
-              </Button>
             </div>
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="text-red-700 hover:text-red-800 p-1"
+              onClick={() => setError(null)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
           </div>
         )}
 
@@ -282,7 +399,7 @@ export default function EnhancedClassroomDashboard() {
             <div>
               <h1 className="text-2xl font-bold">AI Task Prioritizer</h1>
               <p className="text-sm text-gray-600">
-                {session.data?.user?.email || "Classroom Dashboard"}
+                {session?.user?.email || "Classroom Dashboard"}
               </p>
             </div>
           </div>
@@ -339,7 +456,7 @@ export default function EnhancedClassroomDashboard() {
                   <BookOpen className="h-12 w-12 mx-auto text-gray-400 mb-4" />
                   <h3 className="text-lg font-medium text-gray-900">No assignments found</h3>
                   <p className="text-gray-500 mt-2 max-w-md mx-auto">
-                    {error || "You don't have any active assignments right now. Try adding one manually or check your Google Classroom account."}
+                    You don't have any active assignments right now. Try adding one manually or check your Google Classroom account.
                   </p>
                   <div className="mt-6 space-x-3">
                     <Button
@@ -422,28 +539,43 @@ export default function EnhancedClassroomDashboard() {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-4">
-                        {assignments.slice(0, 5).map((assignment) => (
+                        {assignments.slice(0, 10).map((assignment) => (
                           <div 
                             key={assignment.id} 
                             className="border rounded-lg p-4 hover:shadow-sm transition-shadow"
                           >
                             <div className="flex items-start justify-between">
-                              <div>
+                              <div className="flex-1">
                                 <h3 className="font-medium flex items-center">
                                   <span 
-                                    className={`inline-block h-3 w-3 rounded-full mr-2 ${getPriorityColor(assignment.priorityScore).split(' ')[0]}`}
+                                    className={`inline-block h-3 w-3 rounded-full mr-2 ${assignment.courseColor || 'bg-gray-500'}`}
                                   />
                                   {assignment.title}
+                                  {assignment.isManual && (
+                                    <Badge variant="outline" className="ml-2 text-xs">
+                                      Manual
+                                    </Badge>
+                                  )}
                                 </h3>
                                 <p className="text-sm text-gray-600 mt-1">
                                   {assignment.course || 'No course specified'}
                                 </p>
                               </div>
-                              <Badge 
-                                className={`${getPriorityColor(assignment.priorityScore)}`}
-                              >
-                                {assignment.priorityScore?.toFixed(2) || 'N/A'}
-                              </Badge>
+                              <div className="flex items-center gap-2">
+                                <Badge 
+                                  className={`${getPriorityColor(assignment.priorityScore)}`}
+                                >
+                                  {assignment.priorityScore?.toFixed(2) || 'N/A'}
+                                </Badge>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteTask(assignment.id)}
+                                  className="text-red-600 hover:text-red-800 hover:bg-red-50"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
                             
                             <div className="flex flex-wrap items-center gap-4 mt-3 text-sm">
@@ -455,7 +587,7 @@ export default function EnhancedClassroomDashboard() {
                                 <Clock className="h-4 w-4 mr-1" />
                                 {assignment.estimatedTime} min
                               </div>
-                              {assignment.link && (
+                              {assignment.link && assignment.link !== "#" && (
                                 <Link 
                                   href={assignment.link} 
                                   target="_blank"
@@ -476,7 +608,6 @@ export default function EnhancedClassroomDashboard() {
             </TabsContent>
 
             <TabsContent value="tasks">
-              {/* Tasks Tab Content */}
               <div className="space-y-4">
                 <div className="flex flex-col md:flex-row gap-4">
                   <div className="flex-1">
@@ -487,7 +618,7 @@ export default function EnhancedClassroomDashboard() {
                       onKeyDown={(e) => e.key === 'Enter' && handleNaturalLanguageSubmit()}
                     />
                   </div>
-                  <Button onClick={handleNaturalLanguageSubmit}>
+                  <Button onClick={handleNaturalLanguageSubmit} disabled={!naturalLanguageInput.trim()}>
                     <MessageSquare className="h-4 w-4 mr-2" />
                     Parse
                   </Button>
@@ -496,13 +627,29 @@ export default function EnhancedClassroomDashboard() {
                 <div className="bg-white rounded-lg shadow-sm border">
                   {assignments.length === 0 ? (
                     <div className="p-8 text-center">
-                      <p className="text-gray-500">No tasks yet. Add some using the input above.</p>
+                      <p className="text-gray-500">No tasks yet. Add some using the input above or the Add Task button.</p>
                     </div>
                   ) : (
                     <div className="divide-y">
                       {assignments.map((assignment) => (
-                        <div key={assignment.id} className="p-4 hover:bg-gray-50">
-                          {/* Task item rendering */}
+                        <div key={assignment.id} className="p-4 hover:bg-gray-50 flex items-center justify-between">
+                          <div className="flex-1">
+                            <h3 className="font-medium">{assignment.title}</h3>
+                            <p className="text-sm text-gray-600">{assignment.course}</p>
+                            <div className="flex items-center gap-4 mt-1 text-xs text-gray-500">
+                              <span>{getDaysUntilDue(assignment.dueDate)}</span>
+                              <span>{assignment.estimatedTime}min</span>
+                              <span>Priority: {assignment.priorityScore?.toFixed(2) || 'N/A'}</span>
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteTask(assignment.id)}
+                            className="text-red-600 hover:text-red-800"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         </div>
                       ))}
                     </div>
@@ -512,7 +659,6 @@ export default function EnhancedClassroomDashboard() {
             </TabsContent>
 
             <TabsContent value="recommendations">
-              {/* Recommendations Tab Content */}
               <Card>
                 <CardHeader>
                   <CardTitle>AI Recommendations</CardTitle>
@@ -520,13 +666,17 @@ export default function EnhancedClassroomDashboard() {
                 <CardContent>
                   {getSmartRecommendations().length > 0 ? (
                     <div className="space-y-4">
-                      {/* Render recommendations */}
+                      {getSmartRecommendations().map((recommendation, index) => (
+                        <div key={index} className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                          <p className="text-sm text-blue-800">{recommendation}</p>
+                        </div>
+                      ))}
                     </div>
                   ) : (
                     <div className="text-center py-8">
                       <Lightbulb className="h-12 w-12 mx-auto text-gray-400 mb-4" />
                       <p className="text-gray-500">
-                        No recommendations available. Complete some tasks first.
+                        Add some tasks to get AI-powered recommendations.
                       </p>
                     </div>
                   )}
@@ -535,23 +685,31 @@ export default function EnhancedClassroomDashboard() {
             </TabsContent>
 
             <TabsContent value="settings">
-              {/* Settings Tab Content */}
               <Card>
                 <CardHeader>
                   <CardTitle>Settings</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div>
-                      <Label>Export Tasks</Label>
-                      <p className="text-sm text-gray-500 mb-2">
-                        Download all tasks as a text file
-                      </p>
-                      <Button variant="outline" onClick={exportTasks}>
-                        <Download className="h-4 w-4 mr-2" />
-                        Export
-                      </Button>
-                    </div>
+                <CardContent className="space-y-6">
+                  <div>
+                    <Label className="text-base font-medium">Export Tasks</Label>
+                    <p className="text-sm text-gray-500 mb-2">
+                      Download all tasks as a text file
+                    </p>
+                    <Button variant="outline" onClick={exportTasks}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Export Tasks
+                    </Button>
+                  </div>
+                  
+                  <div>
+                    <Label className="text-base font-medium">Data Management</Label>
+                    <p className="text-sm text-gray-500 mb-2">
+                      Clear deleted tasks history ({deletedTaskIds.size} deleted)
+                    </p>
+                    <Button variant="outline" onClick={clearDeletedTasks} disabled={deletedTaskIds.size === 0}>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Reset Deleted Tasks
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -611,17 +769,18 @@ export default function EnhancedClassroomDashboard() {
               <Label htmlFor="estimatedTime" className="text-right">
                 Est. Time (min)
               </Label>
-              <Slider
-                id="estimatedTime"
-                defaultValue={[newTask.estimatedTime]}
-                max={240}
-                step={15}
-                onValueChange={(val) => setNewTask({...newTask, estimatedTime: val[0]})}
-                className="col-span-3"
-              />
-              <span className="col-start-2 col-span-3 text-sm text-gray-500 -mt-2">
-                {newTask.estimatedTime} minutes
-              </span>
+              <div className="col-span-3 space-y-2">
+                <Slider
+                  id="estimatedTime"
+                  value={[newTask.estimatedTime]}
+                  max={240}
+                  step={15}
+                  onValueChange={(val) => setNewTask({...newTask, estimatedTime: val[0]})}
+                />
+                <span className="text-sm text-gray-500">
+                  {newTask.estimatedTime} minutes
+                </span>
+              </div>
             </div>
             
             <div className="grid grid-cols-4 items-center gap-4">
